@@ -127,58 +127,58 @@ def gemini_models():
     return sorted(cands, key=key)
 
 
-_MODELS = None
-
-
-def candidate_models():
-    """Ask Google which models exist right now, newest Flash first (model names get retired)."""
-    global _MODELS
-    if _MODELS is not None:
-        return _MODELS
-    names = []
-    try:
-        r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
-                         params={"key": KEY, "pageSize": 200}, timeout=60)
-        r.raise_for_status()
-        for m in r.json().get("models", []):
-            n = m["name"].split("/")[-1]
-            if "generateContent" in m.get("supportedGenerationMethods", []) and n.startswith("gemini") \
-                    and "flash" in n and not any(x in n for x in ("image", "tts", "live", "audio", "embedding", "thinking", "robotics")):
-                names.append(n)
-    except Exception as e:
-        print("model list failed:", e)
-
-    def key(n):
-        v = re.search(r"gemini-(\d+(?:\.\d+)?)", n)
-        return (float(v.group(1)) if v else 0, "lite" not in n, "preview" not in n and "exp" not in n, n)
-    names.sort(key=key, reverse=True)
-    if os.environ.get("GEMINI_MODEL"):
-        names.insert(0, os.environ["GEMINI_MODEL"])
-    _MODELS = names[:6] or ["gemini-flash-latest"]
-    print("models to try:", _MODELS)
-    return _MODELS
+COMMON = """You write viral YouTube Shorts horror/mystery stories narrated by an AI voice and shown as fast-cut
+Roblox-style 3D animated scenes (blocky plastic avatars, cinematic lighting).
+RULES:
+- The FIRST sentence of scene 1 is a shocking hook that makes people stop scrolling (a time, a number, a disappearance, a warning).
+- Simple spoken English, short punchy sentences, present or past tense, no filler. Every scene is 1-2 short sentences (8-18 words).
+- Keep tension rising scene by scene. Include one or two creepy details with exact numbers or times.
+- Last line is short and chilling, ideally echoing the hook so the video loops.
+- Make the main characters consistent: give each a short visual description (hair, clothes colors) in "characters".
+- "image_prompt" for each scene: describe ONE vivid camera shot (who, where, lighting, mood, camera angle). English only,
+  no text or captions in the image, no real people, no brands, nothing gory. Mention the character look every time they appear.
+Return ONLY JSON:
+{"title": "curiosity-driven title, max 70 chars, no hashtags",
+ "description": "2 sentence teaser",
+ "tags": ["8 short tags"],
+ "hook_text": "2-4 word shocking thumbnail text in capitals",
+ "summary": "3 sentence summary of everything that happens",
+ "characters": "visual description of each main character",
+ "setting": "visual description of the main location and color mood",
+ "scenes": [{"narration": "...", "image_prompt": "..."}]}"""
 
 
 def llm(prompt):
     last = None
-    for model in candidate_models():
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        for attempt in range(2):
-            r = requests.post(url, params={"key": KEY}, json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"responseMimeType": "application/json", "temperature": 1.0}}, timeout=180)
+    models = gemini_models()
+    forced = os.environ.get("GEMINI_MODEL")
+    if forced:
+        models.insert(0, forced)
+    models = models[:6] or ["gemini-flash-latest"]
+    print("models to try:", models)
+    for model in models:
+        url = f"{API}/models/{model}:generateContent"
+        for attempt in range(3):
+            try:
+                r = requests.post(url, params={"key": os.environ["GEMINI_API_KEY"]}, timeout=240, json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 1.0, "responseMimeType": "application/json"}})
+            except Exception as e:
+                last = f"{model}: {_scrub(e)[:200]}"
+                time.sleep(10)
+                continue
             if r.status_code == 200:
                 try:
-                    txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    out = _extract_json(r.json()["candidates"][0]["content"]["parts"][0]["text"])
                     print("story model:", model)
-                    return json.loads(txt)
+                    return out
                 except Exception as e:
-                    last = f"{model}: bad response {e}"
+                    last = f"{model}: unreadable answer {_scrub(e)[:150]}"
                     break
-            last = f"{model}: HTTP {r.status_code} {r.text[:200]}"
+            last = f"{model}: HTTP {r.status_code} {_scrub(r.text)[:200]}"
             print(last)
-            if r.status_code in (429, 503):
-                time.sleep(20)
+            if r.status_code in (429, 500, 503):
+                time.sleep(20 * (attempt + 1))
                 continue
             break
     raise RuntimeError("no Gemini model worked. last: " + str(last))
