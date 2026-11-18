@@ -1,21 +1,37 @@
-"""Diagnostic: Pollinations size/model variants, one request per 47s (free limit: 1 image / 45s per IP)."""
-import time, requests
+"""Diagnostic: which free voice services work from GitHub's servers (with hard timeouts)?"""
+import asyncio, time, requests, subprocess, os
 
-P = "blocky plastic roblox style 3D character standing on a quiet night street, cinematic lighting, vertical"
-q = requests.utils.quote(P)
-variants = [
-    ("720x1280 no model", "width=720&height=1280&nologo=true"),
-    ("576x1024 flux", "width=576&height=1024&nologo=true&model=flux"),
-    ("720x1280 flux", "width=720&height=1280&nologo=true&model=flux"),
-    ("540x960 no model", "width=540&height=960&nologo=true"),
-]
-for i, (label, qs) in enumerate(variants):
-    if i:
-        time.sleep(47)
+TEXT = "At exactly midnight, a child disappeared from the quiet street."
+
+async def edge(voice, boundary):
+    import edge_tts
+    c = edge_tts.Communicate(TEXT, voice, boundary=boundary)
+    n = b = 0
+    async for ch in c.stream():
+        if ch["type"] == "audio": b += len(ch["data"])
+        elif ch["type"] == "WordBoundary": n += 1
+    return f"audio {b}B, word events {n}"
+
+for voice, boundary in [("en-US-GuyNeural", "WordBoundary"), ("en-US-GuyNeural", "SentenceBoundary")]:
     s = time.time()
     try:
-        r = requests.get(f"https://image.pollinations.ai/prompt/{q}?{qs}&seed={i+11}", timeout=120)
-        ct = r.headers.get("content-type", "")
-        print(f"{label}: HTTP {r.status_code} {ct[:18]} {len(r.content)}B {'' if ct.startswith('image') else r.text[:140]} [{time.time()-s:.0f}s]", flush=True)
+        print(f"edge-tts {voice} {boundary}:", asyncio.run(asyncio.wait_for(edge(voice, boundary), 40)), f"[{time.time()-s:.0f}s]", flush=True)
+    except BaseException as e:
+        print(f"edge-tts {voice} {boundary}: FAIL {type(e).__name__} {str(e)[:150]} [{time.time()-s:.0f}s]", flush=True)
+
+for v in ["Brian", "Matthew", "Joey"]:
+    s = time.time()
+    try:
+        r = requests.get("https://api.streamelements.com/kappa/v2/speech", params={"voice": v, "text": TEXT}, timeout=30)
+        print(f"streamelements {v}: HTTP {r.status_code} {r.headers.get('content-type','')[:20]} {len(r.content)}B [{time.time()-s:.0f}s]", flush=True)
     except Exception as e:
-        print(f"{label}: EXC {str(e)[:120]}", flush=True)
+        print(f"streamelements {v}: FAIL {str(e)[:100]}", flush=True)
+
+try:
+    subprocess.run(["pip", "install", "-q", "gTTS"], check=True, capture_output=True)
+    from gtts import gTTS
+    s = time.time()
+    gTTS(TEXT, lang="en", tld="com").save("g.mp3")
+    print(f"gTTS: ok {os.path.getsize('g.mp3')}B [{time.time()-s:.0f}s]", flush=True)
+except Exception as e:
+    print("gTTS: FAIL", str(e)[:120], flush=True)
