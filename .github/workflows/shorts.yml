@@ -25,6 +25,16 @@ jobs:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      - name: Keep last video for review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: last-video
+          path: |
+            work/final.mp4
+            work/thumb.jpg
+          retention-days: 3
+          if-no-files-found: ignore
       - name: Save learning state
         if: always()
         run: |

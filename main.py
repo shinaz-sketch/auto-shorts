@@ -5,7 +5,6 @@ Flow per run: learn from stats -> write story (Gemini) -> images (Pollinations) 
 Long stories are split into Part 1 / Part 2 across consecutive runs.
 """
 import os, re, json, random, time, subprocess, asyncio, pathlib, shutil
-from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -188,7 +187,7 @@ def make_story(s, genre, part, series):
     top = sorted([v for v in s["videos"] if v.get("vph")], key=lambda v: -v["vph"])[:3]
     recent = [v["title"] for v in s["videos"][-25:]]
     hints = (f"Best performing titles so far (same spirit, never copy): {[v['title'] for v in top]}\n" if top else "")
-    n = random.randint(18, 22)
+    n = random.randint(12, 14)
     if part == 2:
         task = (f"Write PART 2 (the final part) of this story. Keep the same characters and setting.\n"
                 f"Title: {series['title']}\nCharacters: {series['characters']}\nSetting: {series['setting']}\n"
@@ -239,18 +238,30 @@ def tts_scene(text, voice, mp3):
     raise RuntimeError(f"tts failed: {last}")
 
 
+_last_image_at = 0.0
+IMAGE_GAP = 46  # free image service: 1 image / 45 s per IP
+
+
 def fetch_image(prompt, path, seed):
+    global _last_image_at
     q = requests.utils.quote(prompt[:1200])
-    for i in range(4):
+    for i in range(6):
+        wait = _last_image_at + IMAGE_GAP - time.time()
+        if wait > 0:
+            time.sleep(wait)
         try:
             r = requests.get(f"https://image.pollinations.ai/prompt/{q}?width={W}&height={H}&nologo=true"
-                             f"&seed={seed}&model=flux", timeout=150)
+                             f"&seed={seed}&model=flux", timeout=170)
             if r.ok and r.headers.get("content-type", "").startswith("image") and len(r.content) > 5000:
                 pathlib.Path(path).write_bytes(r.content)
+                _last_image_at = time.time()
                 return True
-        except Exception:
-            pass
-        time.sleep(5 * (i + 1))
+            print(f"image http {r.status_code}: {r.text[:90]!r}", flush=True)
+            _last_image_at = time.time() if r.status_code == 402 else _last_image_at
+            time.sleep(12 if r.status_code in (500, 502, 503, 504) else 3)
+        except Exception as e:
+            print("image error:", str(e)[:100], flush=True)
+            time.sleep(8)
     return False
 
 
@@ -302,10 +313,13 @@ def build_video(story, voice, work):
     prefix = (f"{STYLE}. Setting: {story.get('setting', '')}. "
               f"Characters: {story.get('characters', '')[:380]}. Shot: ")
 
-    def get(i):
-        return fetch_image(prefix + scenes[i]["image_prompt"], work / f"i{i}.jpg", random.randint(1, 10**6))
-    with ThreadPoolExecutor(3) as ex:
-        oks = list(ex.map(get, range(len(scenes))))
+    t0, oks = time.time(), []
+    for i in range(len(scenes)):
+        if time.time() - t0 > 1500:  # time budget: reuse nearby images for the rest
+            oks.append(False)
+            continue
+        oks.append(fetch_image(prefix + scenes[i]["image_prompt"], work / f"i{i}.jpg", random.randint(1, 10**6)))
+        print(f"image {i + 1}/{len(scenes)} {'ok' if oks[-1] else 'FAILED'} ({time.time() - t0:.0f}s)", flush=True)
     if sum(oks) < 0.6 * len(scenes):
         raise RuntimeError(f"image service failed ({sum(oks)}/{len(scenes)} images)")
     good = [i for i, ok in enumerate(oks) if ok]
