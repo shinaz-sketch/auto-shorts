@@ -14,10 +14,10 @@ def svc():
     return build("youtube", "v3", credentials=c, cache_discovery=False)
 
 
-def upload(path, title, desc, tags):
+def upload(path, title, desc, tags, privacy="public"):
     body = {
         "snippet": {"title": title[:95], "description": desc[:4900], "tags": tags[:15], "categoryId": "24"},
-        "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False, "containsSyntheticMedia": True},
+        "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False, "containsSyntheticMedia": True},
     }
     req = svc().videos().insert(part="snippet,status", body=body,
                                 media_body=MediaFileUpload(path, chunksize=-1, resumable=True))
@@ -25,6 +25,10 @@ def upload(path, title, desc, tags):
     while resp is None:
         _, resp = req.next_chunk()
     return resp["id"]
+
+
+def set_thumbnail(video_id, jpg):
+    svc().thumbnails().set(videoId=video_id, media_body=MediaFileUpload(jpg, mimetype="image/jpeg")).execute()
 
 
 def stats(ids):
