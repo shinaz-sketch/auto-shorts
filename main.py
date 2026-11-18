@@ -499,7 +499,13 @@ if __name__ == "__main__":
     if os.environ.get("DRY_RUN"):
         dry_run()
         raise SystemExit(0)
-    for attempt in range(3):
+    try:
+        import yt
+        print("YouTube channel:", yt.check(), flush=True)
+    except Exception as e:
+        print("YOUTUBE LOGIN PROBLEM:", _scrub(e)[:300], flush=True)
+        raise SystemExit(2)
+    for attempt in range(2):
         try:
             run_once()
             break

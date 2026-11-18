@@ -14,16 +14,27 @@ def svc():
     return build("youtube", "v3", credentials=c, cache_discovery=False)
 
 
+def check():
+    """Fail fast: prove the stored YouTube login works and return the channel name."""
+    for k in ("YT_CLIENT_ID", "YT_CLIENT_SECRET", "YT_REFRESH_TOKEN"):
+        if not os.environ.get(k):
+            raise RuntimeError(f"GitHub secret {k} is empty or missing")
+    items = svc().channels().list(part="snippet", mine=True).execute().get("items", [])
+    if not items:
+        raise RuntimeError("this Google login has no YouTube channel")
+    return items[0]["snippet"]["title"]
+
+
 def upload(path, title, desc, tags, privacy="public"):
     body = {
         "snippet": {"title": title[:95], "description": desc[:4900], "tags": tags[:15], "categoryId": "24"},
         "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False, "containsSyntheticMedia": True},
     }
     req = svc().videos().insert(part="snippet,status", body=body,
-                                media_body=MediaFileUpload(path, chunksize=-1, resumable=True))
+                                media_body=MediaFileUpload(path, chunksize=8 * 1024 * 1024, resumable=True))
     resp = None
     while resp is None:
-        _, resp = req.next_chunk()
+        _, resp = req.next_chunk(num_retries=3)
     return resp["id"]
 
 
