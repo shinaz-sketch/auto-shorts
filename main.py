@@ -44,8 +44,8 @@ def save_state(s):
     STATE.write_text(json.dumps(s, indent=1))
 
 
-def run(cmd, cwd=None):
-    r = subprocess.run([str(c) for c in cmd], cwd=cwd, capture_output=True, text=True)
+def run(cmd, cwd=None, timeout=900):
+    r = subprocess.run([str(c) for c in cmd], cwd=cwd, capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError(f"{cmd[0]} failed: {r.stderr[-800:]}")
     return r.stdout
@@ -225,17 +225,24 @@ async def _tts(text, voice, mp3):
     return words
 
 
+def _gtts(text, mp3):
+    from gtts import gTTS
+    gTTS(text, lang="en", tld="com").save(mp3)
+    return []  # no word timings: captions are spread evenly
+
+
 def tts_scene(text, voice, mp3):
     last = None
-    for _ in range(3):
+    for v in (voice, voice, "en-US-GuyNeural"):
         try:
-            words = asyncio.run(_tts(text, voice, mp3))
+            words = asyncio.run(asyncio.wait_for(_tts(text, v, mp3), 50))
             if os.path.getsize(mp3) > 1000:
                 return words
-        except Exception as e:
+        except BaseException as e:
             last = e
-            time.sleep(3)
-    raise RuntimeError(f"tts failed: {last}")
+            time.sleep(2)
+    print(f"edge-tts failed ({type(last).__name__}), using backup voice", flush=True)
+    return _gtts(text, mp3)
 
 
 _last_image_at = 0.0
@@ -353,16 +360,20 @@ def build_video(story, voice, work):
         prev_end = end_frame
         wavs.append(wav)
     total = cum
+    print(f'voice done: {total:.0f}s of narration, {len(shots)} shots', flush=True)
     if total > 175:
         raise RuntimeError(f"video too long: {total:.0f}s")
 
+    t1 = time.time()
     for k, (img, frames, fx) in enumerate(shots):
         encode_shot(img, frames, fx, f"c{k}.mp4", work)
+    print(f'shots encoded in {time.time() - t1:.0f}s', flush=True)
     (work / "v.txt").write_text("".join(f"file 'c{k}.mp4'\n" for k in range(len(shots))))
     (work / "a.txt").write_text("".join(f"file '{w.name}'\n" for w in wavs))
     run(["ffmpeg", "-y", "-f", "concat", "-safe", 0, "-i", "v.txt", "-c", "copy", "video.mp4"], work)
     run(["ffmpeg", "-y", "-f", "concat", "-safe", 0, "-i", "a.txt", "-c", "copy", "narration.wav"], work)
     make_ass(words_all, work / "cap.ass")
+    print("mixing final video", flush=True)
 
     drone = ("aevalsrc=0.5*sin(2*PI*55*t)+0.3*sin(2*PI*82.4*t)*(0.6+0.4*sin(2*PI*0.2*t))"
              f"+0.15*sin(2*PI*110*t):s=44100:d={total:.2f}")
@@ -411,6 +422,36 @@ def make_thumbnail(img_path, hook, part, out):
 
 
 # ---------------------------------------------------------------- main
+def dry_run():
+    """Build a whole video with placeholder pictures (no uploads, no image service) to test the machine."""
+    from PIL import Image, ImageDraw
+
+    def fake(prompt, path, seed):
+        random.seed(seed)
+        im = Image.new("RGB", (W, H), tuple(random.randint(30, 200) for _ in range(3)))
+        d = ImageDraw.Draw(im)
+        for _ in range(10):
+            x, y = random.randint(0, W - 150), random.randint(0, H - 200)
+            d.rectangle([x, y, x + 140, y + 190], fill=tuple(random.randint(0, 255) for _ in range(3)))
+        im.save(path)
+        return True
+    globals()["fetch_image"] = fake
+    lines = ["At exactly twelve o'clock at night, a child vanished from my street.",
+             "Nobody saw anything, but every house heard the same music.",
+             "It was the ice cream truck, and it was not supposed to exist anymore.",
+             "I followed the sound with my phone light shaking in my hand.",
+             "The truck was parked under a broken streetlight, glowing bright pink.",
+             "The driver smiled at me and said, you are just in time."]
+    story = {"setting": "quiet night street", "characters": "boy in a blue jacket",
+             "scenes": [{"narration": lines[i % len(lines)], "image_prompt": "x"} for i in range(14)]}
+    work = ROOT / "work"
+    shutil.rmtree(work, ignore_errors=True)
+    t = time.time()
+    build_video(story, "en-US-GuyNeural", work)
+    make_thumbnail(work / "i1.jpg", "MISSING AT MIDNIGHT", 1, work / "thumb.jpg")
+    print(f"DRY RUN OK in {time.time() - t:.0f}s", flush=True)
+
+
 def run_once():
     import yt
     s = load_state()
@@ -455,6 +496,9 @@ def run_once():
 
 
 if __name__ == "__main__":
+    if os.environ.get("DRY_RUN"):
+        dry_run()
+        raise SystemExit(0)
     for attempt in range(3):
         try:
             run_once()

@@ -1,0 +1,28 @@
+name: dryrun
+on:
+  workflow_dispatch:
+jobs:
+  dry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - run: pip install -r requirements.txt
+      - run: python main.py
+        env:
+          PYTHONUNBUFFERED: "1"
+          DRY_RUN: "1"
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dry-video
+          path: |
+            work/final.mp4
+            work/thumb.jpg
+          retention-days: 3
+          if-no-files-found: ignore

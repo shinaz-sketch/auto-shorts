@@ -1,6 +1,7 @@
 edge-tts>=7.0
 requests
 pillow
+gTTS
 google-api-python-client
 google-auth
 google-auth-oauthlib
